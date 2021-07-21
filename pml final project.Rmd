@@ -1,0 +1,120 @@
+---
+title: "PML Final Project"
+author: "Justin Hornburg"
+date: "7/20/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Executive Summary
+
+This project involves using data from accelerometers on the belt, forearm, arm and dumbbell of six people while exercising to predict the manner in which the people did the exercise.  The manner is either correct, or one of four incorrect ways.  The data comes from this source: http://groupware.les.inf.puc-rio.br/har, and is the Weight Lifting Exercise Dataset.
+
+The data was split into a training set, containing 19,622 observations of 160 variables, and a test set, consisting of 20 observations.  The goal of the project is to use the training set to build a machine learning model to predict the "classe" variable for the observations in the test set.
+
+My final model is a quadratic discriminant analysis ("qda") model, using a subset of the fields on the training data, with pre-processing using the BoxCox method.  I used 5-fold cross-validation to estimate the out of sample error at about 4.3% (about 95.7% accuracy).  When I predicted the classe values on the test set, and submitted my predictions in the prediction quiz, I got 100%, so I believe my model was pretty good!
+
+## Model Building Process
+
+The fist step was to read in the training and test data with the following code.
+
+```{r}
+training <- read.csv("pml-training.csv")
+testing <- read.csv("pml-testing.csv")
+```
+
+The next step was to do some data exploration on the training data, using str() and summary().  I noticed that many of the fields that appeared to be accelerometer measurements had many blank or missing value.  These are the amplitude, avg, kurtosis, max, min, skewness, stddev, and fields.  These appear to be summaries of the other measurements, for which there are no blank or missing values, so I eliminated these fields as predictors.
+
+My final training set was created using the following code.  It only keeps numeric fields, eliminates all the fields mentioned in the above paragraph, and then adds back in the classe and user_name fields, as the former is what we're predicting, and the latter may be a useful predictor.
+
+```{r}
+library(tidyverse)
+training_use <-
+  training %>%
+  select(where(is.numeric)) %>%
+  select(-X, 
+         -starts_with("amplitude"),
+         -starts_with("avg"),
+         -starts_with("kurtosis"),
+         -starts_with("max"),
+         -starts_with("min"),
+         -starts_with("skewness"),
+         -starts_with("stddev"),
+         -starts_with("var"))
+
+training_use <- cbind(training_use, training$classe, training$user_name)
+names(training_use)[56] <- "classe"
+names(training_use)[57] <- "user_name"
+```
+
+Next, I looked at some boxplots to get a sense for the correlation between various measurements and the classe variable on the training set.  Examples are Figures 1 and 2 in the Appendix.  Figure 2 illustrates that there may be a significant range, and some outliers, in the various readings.  This caused me use pre-processing of the predictors.  At first I used centering and scaling as the pre-processing methods, but the BoxCox method produced slighly higher accuracy in early validation.
+
+## Settling on the Final Model
+
+My first attempt at a model was to use a decision tree (method="rpart").  This produced accuracy of around 50%, which is better than a random guess, which would be about 20% accuracy, but I knew I needed to do better.  I explored using random forests (method="rf"), boosting (method="gbm") and naive Bayes (method="nb"), but all of those were taking a very long time to complete.  
+
+I then tried linear discriminant analysis (method="lda") and it completed in a reasonable time and produced about 75% accuracy, a significant improvement.  Then I tried quadratic discriminant analysis (method="qda") and the accuracy improved to about 96%!
+
+Here is the code that shows the 96% accuracy rate.
+
+```{r}
+library(caret)
+mod_qda <- train(classe ~ ., method="qda", data=training_use,
+                 preProcess=c("BoxCox"))
+predictions <- predict(mod_qda, newdata=training_use)
+confusionMatrix(predictions,factor(training_use$classe))
+```
+
+Up to this point, I had only checked accuracy on the entire test set.  Knowing that this is an optimistic view of accuracy, I decided to use 5-fold cross-validation to estimate what the accuracy will be on the test set (the complement of the out of sample error rate).
+
+The code below creates the five folds and then tests accuracy using the five-fold cross-validation, averaging the accuracy rates across the five folds.
+
+```{r}
+folds <- createFolds(y=training_use$classe, k=5)
+
+test <- function(fold) {
+  training <- training_use[-fold,]
+  validation <- training_use[fold,]
+  fold_mod_qda <- train(classe ~ ., method="qda", data=training,
+                 preProcess=c("BoxCox"))
+  predictions <- predict(fold_mod_qda, newdata=validation)
+  print(confusionMatrix(predictions,
+                        factor(validation$classe))$overall[1])
+  accuracies<<-c(accuracies,
+                 confusionMatrix(predictions,
+                                 factor(validation$classe))$overall[1])
+}
+
+accuracies<-NULL
+test(folds$Fold1)
+test(folds$Fold2)
+test(folds$Fold3)
+test(folds$Fold4)
+test(folds$Fold5)
+mean(accuracies)
+
+```
+## Predictions
+
+Figure 3 in the Appendix shows the final predictions on the 20 test cases.
+
+## Appendix
+
+Figure 1 -- BoxPlot of roll_belt by classe
+```{r, echo=FALSE}
+boxplot(training_use$roll_belt ~ training_use$classe)
+```
+
+Figure 2 -- BoxPlot of gyros_belt_x by classe
+```{r, echo=FALSE}
+boxplot(training_use$gyros_belt_x ~ training_use$classe)
+```
+
+Figure 3 -- Predictions on the testing using the model trained on the total training set
+```{r, echo=FALSE}
+predictions_tot_mod <- predict(mod_qda, newdata=testing)
+predictions_tot_mod
+```
